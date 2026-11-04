@@ -9,11 +9,14 @@ from twisted.internet import reactor
 
 from backend.live_feed import SharedMarketFeed
 from backend.master_contract_updater import fetch_master_contract
+from backend.oi_recorder import record_option_oi
+from backend.alerts import run_alert_cycle
+from backend.index_stocks import refresh_stock_history, sync_index_constituents
 from backend.snapshot_recorder import record_market_snapshot
 
 
 class Command(BaseCommand):
-    help = "Run the shared broker feed and server-only five-minute snapshot recorder."
+    help = "Run the shared broker feed, the five-minute snapshot recorder and the three-minute option OI recorder."
 
     def handle(self, *args, **options):
         stopped = threading.Event()
@@ -42,6 +45,14 @@ class Command(BaseCommand):
         scheduler.add_job(guarded, "cron", hour=8, minute=30, args=[fetch_master_contract])
         scheduler.add_job(guarded, "cron", minute="*/5", second=5,
                           args=[record_market_snapshot], coalesce=True, max_instances=1)
+        scheduler.add_job(guarded, "cron", minute="*/3", second=20,
+                          args=[record_option_oi], coalesce=True, max_instances=1)
+        scheduler.add_job(guarded, "cron", minute="*/5", second=40,
+                          args=[run_alert_cycle], coalesce=True, max_instances=1)
+        scheduler.add_job(guarded, "cron", day_of_week="mon-fri", hour=8, minute=40, args=[sync_index_constituents])
+        scheduler.add_job(guarded, "date", args=[refresh_stock_history])
+        scheduler.add_job(guarded, "cron", day_of_week="mon-fri", hour="8-15", minute="*/10", second=50,
+                          args=[refresh_stock_history], coalesce=True, max_instances=1)
         scheduler.start()
         self.stdout.write("Shared market-feed worker started.")
         next_configure = 0

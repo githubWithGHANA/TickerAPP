@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Columns3, GripVertical, X } from "lucide-react";
+import { ArrowDown, ArrowUp, SlidersHorizontal, GripVertical, X } from "lucide-react";
 import { closestCenter, DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { DEFAULT_MARKET_COLUMNS, ESSENTIAL_MARKET_COLUMNS, MARKET_COLUMNS, selectedMarketColumns } from "../marketColumns";
+import "../marketColumns.css";
 
 const ALL_IDS = MARKET_COLUMNS.map(column => column.id);
 const BY_ID = new Map(MARKET_COLUMNS.map(column => [column.id, column]));
@@ -144,7 +145,7 @@ export default function MarketColumnSelector({ value, onSave }) {
   const trigger = useRef(null);
   return <div className="market-columns-control">
     <button ref={trigger} type="button" className="scan-icon-button" title="Customize columns" aria-label="Customize columns"
-      aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}><Columns3 size={20} /></button>
+      aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}><SlidersHorizontal size={20} /></button>
     {open && <ColumnDialog value={value} onSave={onSave} onClose={() => setOpen(false)} returnFocus={trigger} />}
   </div>;
 }

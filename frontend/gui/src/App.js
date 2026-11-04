@@ -1,6 +1,6 @@
-import "./App.css";
-import Cookies from "js-cookie";
 import { Component } from "react";
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Typography } from "@mui/material";
+import { BellRing, X } from "lucide-react";
 import { toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
@@ -8,6 +8,7 @@ import "react-toastify/dist/ReactToastify.css";
 import MainPage from "./components/mainPage.jsx";
 import LoginForm from "./components/loginForm.jsx";
 import { alertLotThreshold, describeAlertThresholds, DEFAULT_ALERT_LOT_THRESHOLDS } from "./alertThresholds";
+import MentorView from "./components/mentorView";
 
 toast.configure();
 
@@ -32,7 +33,7 @@ const options = {
   position: "bottom-right",
   pauseOnHover: true,
   closeOnClick: true,
-  theme: "dark",
+  theme: "light",
   autoClose: 2500
 }
 
@@ -54,6 +55,7 @@ const HISTORY_MAX_POINTS = MARKET_SESSION_SAMPLES * CONTRACT_MONTH_COUNT * SNAPS
 // live on the backend now (see backend/acdd_analyzer.py and the response of
 // /api/acdd/signals/).
 const AC_DD_VOLUME_ALERT_THRESHOLD_PCT = 250;
+const MAX_SWING_ALERTS = 50;
 const AC_DD_ALERT_TIMEFRAMES = [
   ["5 min", 5],
   ["15 min", 15]
@@ -169,10 +171,7 @@ const getContractMonthCode = value => {
 
   return `${match[1].slice(-2)}${MONTH_CODES[monthIndex]}`;
 };
-// const struct = require("cstruct");
 // const Buffer = require("buffer");
-// const bufferify = require("json-bufferify");
-// let KiteTicker = require("kiteconnect").KiteTicker;
 
 class App extends Component {
   constructor(props) {
@@ -228,7 +227,7 @@ class App extends Component {
       sensexData: emptyTickData(),
       snapshotHeartbeat: emptySnapshotHeartbeat(),
       acDdSignals: { byTimeframe: {}, thresholds: {}, timeframes: [], contractMonth: null },
-      activeAlert: null,
+      swingAlerts: [],
       showAlertSetupPrompt: false,
     }
     try {
@@ -335,7 +334,7 @@ class App extends Component {
 
     if (this.state.loggedIn) {
       this.startAuthCheck();
-      const json = await this.request("current-user/", "GET");
+      const json = await this.request("current-user/", "GET", null, true, false);
 
       if (json.type === "success") {
         this.setState({ username: json.username });
@@ -428,7 +427,8 @@ class App extends Component {
   }
 
   getCsrfCookie = () => {
-    return Cookies.get("csrftoken");
+    const match = document.cookie.split("; ").find(row => row.startsWith("csrftoken="));
+    return match ? decodeURIComponent(match.slice("csrftoken=".length)) : undefined;
   }
 
   formatAlertNumber = value => {
@@ -440,43 +440,6 @@ class App extends Component {
 
     return numericValue.toLocaleString("en-IN", {
       maximumFractionDigits: 2
-    });
-  }
-
-  formatAlertSignedNumber = value => {
-    const numericValue = Number(value);
-
-    if (!Number.isFinite(numericValue) || numericValue === 0) {
-      return this.formatAlertNumber(value);
-    }
-
-    return `${numericValue > 0 ? "+" : ""}${this.formatAlertNumber(numericValue)}`;
-  }
-
-  formatAlertPercent = value => {
-    const numericValue = Number(value);
-
-    if (!Number.isFinite(numericValue)) {
-      return "-";
-    }
-
-    return `${this.formatAlertSignedNumber(numericValue)}%`;
-  }
-
-  formatAlertDateTime = timestamp => {
-    const date = new Date(timestamp);
-
-    if (Number.isNaN(date.getTime())) {
-      return "-";
-    }
-
-    return date.toLocaleString("en-IN", {
-      timeZone: MARKET_TIME_ZONE,
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false
     });
   }
 
@@ -556,18 +519,11 @@ class App extends Component {
     }
   }
 
+  // Alerts are shown inside the page (Swing alerts list, AC/DD panel) with a sound,
+  // never as a popup over the live market.
   showLotSwingAlert = alert => {
-    this.setState({ activeAlert: { type: "lot", ...alert } });
+    this.setState(state => ({ swingAlerts: [...state.swingAlerts, alert].slice(-MAX_SWING_ALERTS) }));
     this.playAlertSound();
-  }
-
-  showAcDdAlert = alert => {
-    this.setState({ activeAlert: { type: "acdd", ...alert } });
-    this.playAlertSound();
-  }
-
-  closeAlertPopup = () => {
-    this.setState({ activeAlert: null });
   }
 
   startAuthCheck = () => {
@@ -600,7 +556,7 @@ class App extends Component {
       this.setState({loggedIn: true});
       this.startAuthCheck();
 
-      const user_json = await this.request("current-user/", "GET");
+      const user_json = await this.request("current-user/", "GET", null, true, false);
 
       if (user_json.type === "success") {
         this.setState({
@@ -613,6 +569,8 @@ class App extends Component {
   }
 
   handleLogout = () => {
+    // End the session on the server as well, so the old token cannot be reused.
+    if (localStorage.getItem("jwt-token")) this.request("logout/", "POST", null, false, false, true);
     localStorage.removeItem("jwt-token");
     this.stopMarketData();
     this.settingsVersion += 1;
@@ -625,7 +583,7 @@ class App extends Component {
       spotPrices: emptySpotPrices(),
       snapshotHeartbeat: emptySnapshotHeartbeat(),
       acDdSignals: { byTimeframe: {}, thresholds: {}, timeframes: [], contractMonth: null },
-      activeAlert: null
+      swingAlerts: []
     });
     this.realtimeLotAlertKeys.clear();
   }
@@ -638,7 +596,7 @@ class App extends Component {
   getSettings = async () => {
     const version = this.settingsVersion;
     const columnVersion = this.columnPreferencesVersion;
-    const json = await this.request("settings/", "GET");
+    const json = await this.request("settings/", "GET", null, true, false);
 
     if (json.type === "success" && this.state.loggedIn && version === this.settingsVersion) {
       await new Promise(resolve => this.setState(previous => ({ settings: {
@@ -706,8 +664,8 @@ class App extends Component {
     }
 
     const byTimeframe = acDdSignals.byTimeframe || {};
-    const threshold = Number(acDdSignals.thresholds?.volumeDiffPct) || 0;
     let alertKeysChanged = false;
+    let newAcDdSignal = false;
 
     AC_DD_ALERT_TIMEFRAMES.forEach(([timeframeLabel, timeframeMinutes]) => {
       const indexResults = byTimeframe[String(timeframeMinutes)] || {};
@@ -734,24 +692,7 @@ class App extends Component {
               return;
             }
 
-            this.showAcDdAlert({
-              indexName: INDEX_LABELS[key],
-              signal: row.signal,
-              side: row.instrumentType,
-              symbol: row.symbol,
-              strike: row.strike,
-              optionPrice: row.indexLevel,
-              previousOptionPrice: row.previousIndexLevel,
-              intervalVolume: row.intervalVolume,
-              previousIntervalVolume: row.previousIntervalVolume,
-              previousTime: row.previousTime,
-              priceChangePct: Number(Number(row.priceChangePct).toFixed(2)),
-              volumeDiffPct: Number(Number(row.volumeDiffPct).toFixed(2)),
-              threshold,
-              timeframeLabel,
-              vwapYN: row.vwapYN,
-              time: row.time
-            });
+            newAcDdSignal = true;
           });
         });
       });
@@ -759,6 +700,10 @@ class App extends Component {
 
     if (alertKeysChanged) {
       this.saveAcDdAlertKeys();
+    }
+
+    if (newAcDdSignal) {
+      this.playAlertSound();
     }
 
     this.acDdAlertsInitialized = true;
@@ -976,6 +921,8 @@ class App extends Component {
     }
 
     this.showLotSwingAlert({
+      indexKey: key,
+      previousTime: previous.time,
       indexName: INDEX_LABELS[key],
       symbol: current.symbol,
       indexLevel: current.indexLevel,
@@ -1115,12 +1062,10 @@ class App extends Component {
       const price = Number(json.spotPrices?.[key]);
       nextState.spotPrices[key] = json.feedStatus === "live" && Number.isFinite(price) && price > 0 ? price : null;
     });
-    this.setState(previous => ({
-      settings: {
-        ...previous.settings,
-        symbols: Object.keys(symbols).length ? symbols : previous.settings.symbols
-      }
-    }));
+    // Contracts change a few times a month; replacing settings every second re-rendered the whole app.
+    if (Object.keys(symbols).length && JSON.stringify(symbols) !== JSON.stringify(this.state.settings.symbols || {})) {
+      this.setState(previous => ({ settings: { ...previous.settings, symbols } }));
+    }
     this.queueTickState(nextState);
   }
 
@@ -1153,174 +1098,40 @@ class App extends Component {
     }
   }
 
-  renderAlertPopup = () => {
-    const alert = this.state.activeAlert;
-
-    if (!alert) {
-      return null;
-    }
-
-    if (alert.type === "acdd") {
-      const priceChgClass = alert.priceChangePct < 0 ? "value-down" : "value-up";
-      const prevTimeLabel = alert.previousTime ? this.formatAlertDateTime(alert.previousTime) : "—";
-      const currTimeLabel = this.formatAlertDateTime(alert.time);
-
-      return (
-        <div className="lot-alert-overlay" role="alertdialog" aria-modal="true" aria-labelledby="acdd-alert-title">
-          <div className="lot-alert-modal">
-            <div className="lot-alert-head">
-              <div>
-                <div className="lot-alert-label">AC/DD Alert</div>
-                <h2 id="acdd-alert-title">{alert.indexName} {alert.side} {alert.signal} {alert.timeframeLabel || "5 min"} volume surge</h2>
-              </div>
-              <button className="lot-alert-close" type="button" onClick={this.closeAlertPopup} aria-label="Close alert">x</button>
-            </div>
-
-            <div className="lot-alert-body">
-              <div className="lot-alert-symbol">{alert.symbol}</div>
-              <div className="lot-alert-time">Alert time: {currTimeLabel}</div>
-              <div className={`lot-alert-swing ${alert.signal === "DD" ? "value-down" : "value-up"}`}>
-                {alert.signal} | {this.formatAlertPercent(alert.volumeDiffPct)} vol diff
-              </div>
-
-              <table className="acdd-candle-table">
-                <thead>
-                  <tr>
-                    <th></th>
-                    <th>Previous candle<br/><span className="acdd-candle-time">{prevTimeLabel}</span></th>
-                    <th>Signal candle<br/><span className="acdd-candle-time">{currTimeLabel}</span></th>
-                    <th>Δ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>Option price</td>
-                    <td>{this.formatAlertNumber(alert.previousOptionPrice)}</td>
-                    <td>{this.formatAlertNumber(alert.optionPrice)}</td>
-                    <td className={priceChgClass}>{this.formatAlertPercent(alert.priceChangePct)}</td>
-                  </tr>
-                  <tr>
-                    <td>Volume ({alert.timeframeLabel || "5 min"})</td>
-                    <td>{this.formatAlertNumber(alert.previousIntervalVolume)}</td>
-                    <td>{this.formatAlertNumber(alert.intervalVolume)}</td>
-                    <td className="value-up">{this.formatAlertPercent(alert.volumeDiffPct)}</td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <div className="lot-alert-grid">
-                <div>
-                  <span>Threshold</span>
-                  <strong>{this.formatAlertNumber(alert.threshold)}%</strong>
-                </div>
-                <div>
-                  <span>Timeframe</span>
-                  <strong>{alert.timeframeLabel || "5 min"}</strong>
-                </div>
-                <div>
-                  <span>VWAP?</span>
-                  <strong>{alert.vwapYN}</strong>
-                </div>
-                <div>
-                  <span>Strike</span>
-                  <strong>{this.formatAlertNumber(alert.strike)}</strong>
-                </div>
-              </div>
-            </div>
-
-            <div className="lot-alert-actions">
-              <button type="button" onClick={this.closeAlertPopup}>Dismiss</button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="lot-alert-overlay" role="alertdialog" aria-modal="true" aria-labelledby="lot-alert-title">
-        <div className="lot-alert-modal">
-          <div className="lot-alert-head">
-            <div>
-              <div className="lot-alert-label">Lot Swing Alert</div>
-              <h2 id="lot-alert-title">{alert.indexName} threshold crossed</h2>
-            </div>
-            <button className="lot-alert-close" type="button" onClick={this.closeAlertPopup} aria-label="Close alert">x</button>
-          </div>
-
-          <div className="lot-alert-body">
-            <div className="lot-alert-symbol">{alert.symbol}</div>
-            <div className="lot-alert-time">Alert time: {this.formatAlertDateTime(alert.time)}</div>
-            <div className={`lot-alert-swing ${alert.swingLots < 0 ? "value-down" : "value-up"}`}>
-              {this.formatAlertSignedNumber(alert.swingLots)} lots
-            </div>
-            <div className="lot-alert-grid">
-              <div>
-                <span>Time</span>
-                <strong>{this.formatAlertDateTime(alert.time)}</strong>
-              </div>
-              <div>
-                <span>Threshold</span>
-                <strong>{this.formatAlertNumber(alert.threshold)} lots</strong>
-              </div>
-              <div>
-                <span>Index</span>
-                <strong>{this.formatAlertNumber(alert.indexLevel)}</strong>
-              </div>
-              <div>
-                <span>Previous lots</span>
-                <strong>{this.formatAlertSignedNumber(alert.previousNetLots)}</strong>
-              </div>
-              <div>
-                <span>Current lots</span>
-                <strong>{this.formatAlertSignedNumber(alert.currentNetLots)}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="lot-alert-actions">
-            <button type="button" onClick={this.closeAlertPopup}>Dismiss</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   renderAlertSetupPrompt = () => {
     if (!this.state.showAlertSetupPrompt) {
       return null;
     }
 
     return (
-      <div className="lot-alert-overlay" role="dialog" aria-modal="true" aria-labelledby="alert-setup-title">
-        <div className="lot-alert-modal alert-setup-modal">
-          <div className="lot-alert-head">
-            <div>
-              <div className="lot-alert-label">Alert Setup</div>
-              <h2 id="alert-setup-title">Enable screen alerts?</h2>
-            </div>
-            <button className="lot-alert-close" type="button" onClick={this.dismissAlertSetupPrompt} aria-label="Close alert setup">x</button>
-          </div>
-
-          <div className="lot-alert-body">
-            <p className="alert-setup-copy">
-              Screen popup and sound alerts will trigger when a five-minute lot swing reaches {describeAlertThresholds(this.state.settings, this.formatAlertNumber)} lots, and for AC/DD option volume surges above {this.formatAlertNumber(AC_DD_VOLUME_ALERT_THRESHOLD_PCT)}%.
-            </p>
-            <p className="alert-setup-copy muted">
-              Email is optional and can be added later from Settings.
-            </p>
-          </div>
-
-          <div className="lot-alert-actions">
-            <button className="secondary" type="button" onClick={this.dismissAlertSetupPrompt}>Not now</button>
-            <button type="button" onClick={this.enableAlertsFromPrompt}>Enable alerts</button>
-          </div>
-        </div>
-      </div>
+      <Dialog open onClose={this.dismissAlertSetupPrompt} aria-labelledby="alert-setup-title" maxWidth="xs" fullWidth>
+        <DialogTitle id="alert-setup-title" sx={{ display: "flex", alignItems: "center", gap: 1.5, pr: 6 }}>
+          <Box sx={{ width: 40, height: 40, flex: "none", borderRadius: "50%", display: "grid", placeItems: "center", bgcolor: "rgba(74,111,224,0.12)", color: "primary.main" }}>
+            <BellRing size={20} aria-hidden="true" />
+          </Box>
+          Enable sound alerts?
+          <IconButton onClick={this.dismissAlertSetupPrompt} aria-label="Close alert setup" sx={{ position: "absolute", right: 10, top: 10 }}><X size={18} /></IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            A sound plays and the swing is highlighted in Swing alerts when a five-minute lot swing reaches {describeAlertThresholds(this.state.settings, this.formatAlertNumber)} lots, and for AC/DD option volume surges above {this.formatAlertNumber(AC_DD_VOLUME_ALERT_THRESHOLD_PCT)}%.
+          </Typography>
+          <Typography variant="body2" color="text.secondary">Email is optional and can be added later from Settings.</Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={this.dismissAlertSetupPrompt}>Not now</Button>
+          <Button variant="contained" onClick={this.enableAlertsFromPrompt}>Enable alerts</Button>
+        </DialogActions>
+      </Dialog>
     );
   }
 
   render() {
     let page = null;
+
+    if (window.location.hash.startsWith("#mentor/")) {
+      return <MentorView token={window.location.hash.slice("#mentor/".length)} />;
+    }
 
     if (!this.state.loggedIn) {
       page = <LoginForm
@@ -1349,15 +1160,15 @@ class App extends Component {
         chartHistory={this.state.chartHistory}
         snapshotHeartbeat={this.state.snapshotHeartbeat}
         acDdSignals={this.state.acDdSignals}
+        swingAlerts={this.state.swingAlerts}
       />
     }
 
     return (
-      <div className="App">
+      <>
         {page}
         {this.renderAlertSetupPrompt()}
-        {this.renderAlertPopup()}
-      </div>
+      </>
     );
   }
 }

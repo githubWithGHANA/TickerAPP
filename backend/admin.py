@@ -33,17 +33,6 @@ class TickerUserAdminForm(forms.ModelForm):
         self._stored_password = self.instance.password
         self.initial["password"] = ""
         self.fields["password"].required = not self.instance.pk
-        optional_fields = [
-            "broker_username",
-            "broker_password",
-            "broker_twofa",
-            "broker_api_key",
-            "broker_api_secret",
-            "broker_access_token",
-        ]
-        for field_name in optional_fields:
-            if field_name in self.fields:
-                self.fields[field_name].required = False
 
     def save(self, commit=True):
         user = super().save(commit=False)
@@ -321,3 +310,41 @@ admin.site.empty_value_display = "-"
 admin.site.site_header = "Ticker Admin"
 admin.site.site_title = "Utraders Ticker Admin"
 admin.site.index_title = "Operations Console"
+
+
+@admin.register(models.MarketNote)
+class MarketNoteAdmin(admin.ModelAdmin):
+    list_display = ("date", "level", "message")
+    list_filter = ("level", "date")
+    search_fields = ("message",)
+
+
+@admin.register(models.TelegramSettings)
+class TelegramSettingsAdmin(admin.ModelAdmin):
+    list_display = ("enabled", "updated_at")
+
+
+@admin.register(models.Alert)
+class AlertAdmin(admin.ModelAdmin):
+    """Read-only: alerts are locked once sent."""
+
+    list_display = ("created_at", "index_key", "kind", "strength", "status", "message", "outcome")
+    list_filter = ("index_key", "strength", "status", "outcome")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(models.IndexConstituent)
+class IndexConstituentAdmin(admin.ModelAdmin):
+    """NIFTY 50 and BANK NIFTY refresh from NSE each morning. Keep SENSEX in step with BSE's list here."""
+
+    list_display = ("index_key", "symbol", "company", "sector", "updated_at")
+    list_filter = ("index_key",)
+    search_fields = ("symbol", "company")

@@ -1,6 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import App from "./App";
 
+// These tests cover the Index dashboard tables, which the home screen shows under "More details".
+jest.mock("./components/home", () => ({ __esModule: true, default: ({ details }) => <div>{details}</div> }));
+
 const keys = ["nifty", "banknifty", "sensex"];
 const months = ["current", "next", "far"];
 const spots = [25000, 56000, 81000];
@@ -68,7 +71,16 @@ test("an older settings response cannot replace a newly saved column selection",
   expect(app.state.settings.marketColumns).toEqual(["spot"]);
 });
 const differenceCells = () => within(screen.getByRole("region", { name: "Index comparison" }))
-  .getAllByRole("row").slice(1).map(row => within(row).getAllByRole("cell")[2]);
+  .getAllByRole("article").map(card => card.querySelector('[data-column="difference"] dd'));
+
+test("price updates keep the same settings object unless the contracts change", async () => {
+  const before = app.state.settings;
+  app.applyMarketData(response()); flush();
+  expect(app.state.settings).toBe(before);
+  app.applyMarketData(response("next")); flush();
+  expect(app.state.settings).not.toBe(before);
+  expect(app.state.settings.symbols.nifty.symbol).toBe("NIFTYNEXTFUT");
+});
 
 test.each(months)("shows all three spot/futures differences for %s without a broker connection", async month => {
   const websocket = jest.spyOn(global, "WebSocket");
@@ -82,7 +94,8 @@ test.each(months)("shows all three spot/futures differences for %s without a bro
     expect(differenceCells()[i]).toHaveTextContent((value > 0 ? "+" : "") + value.toLocaleString("en-IN"));
   });
   expect(websocket).not.toHaveBeenCalled();
-  expect(app.request.mock.calls.every(([route]) => route.startsWith("market-data/"))).toBe(true);
+  // Only server-side market routes: the browser never talks to the broker or holds its token.
+  expect(app.request.mock.calls.every(([route]) => route.startsWith("market-data/") || route.startsWith("market/candles/"))).toBe(true);
   expect(app.state.accessToken).toBeUndefined();
 });
 
